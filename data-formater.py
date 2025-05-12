@@ -7,6 +7,7 @@ import re
 
 # Define the endpoint and query parameters
 COLUMNS_TO_READ = [
+    "pdcm_model_id",
     "external_model_id",
     "provider_name",
     "model_type",
@@ -29,6 +30,7 @@ COLUMNS_TO_READ = [
 BASE_URL = "https://dev.cancermodels.org/api/"
 SEARCH_INDEX_ENDPOINT = BASE_URL + "search_index"
 MODEL_MOLECULAR_METADATA_ENDPOINT = BASE_URL + "model_molecular_metadata"
+PATIENT_TREATMENT_ENDPOINT = BASE_URL + "patient_treatment"
 RELEASE_ENDPOINT = BASE_URL + "release_info"
 PARAMS = {
     "select": ",".join(COLUMNS_TO_READ),
@@ -168,9 +170,15 @@ def add_subsections(study_section, model, model_folder_path):
     molecular_data_subsection = create_molecular_data_subsection(
         model, model_folder_path
     )
+    patient_treatment_subsection, patient_treatment_links = (
+        create_patient_treatment_subsection(model)
+    )
+    print("patient_treatment_links -->", patient_treatment_links)
+
     subsections.append(molecular_data_subsection)
 
     subsections.append(quality_control_subsection)
+    subsections.append(patient_treatment_subsection)
     study_section["subsections"] = subsections
     return study_section
 
@@ -205,10 +213,8 @@ def create_patient_tumor_subsection(model):
 
 def create_pdx_model_engraftment_subsection(model):
     rows = []
-    print("model", model)
     xenograft_model_specimens = model["xenograft_model_specimens"]
     for row in xenograft_model_specimens:
-        print("row", row)
         subsection_row = {}
         attributes = []
 
@@ -345,6 +351,56 @@ def create_molecular_data_subsection(model, model_folder_path):
     return molecular_data_subsection
 
 
+def create_patient_treatment_subsection(model):
+    rows = []
+    biostudies_links = []
+
+    url = f"{PATIENT_TREATMENT_ENDPOINT}?model_id=eq.{model['pdcm_model_id']}"
+    print("url:::", url)
+
+    response = requests.get(url)
+    response.raise_for_status()
+    data = response.json()
+
+    # Process each model in the current batch
+    for patient_treatment_metadata_row in data:
+        print("patient_treatment_metadata_row-->", patient_treatment_metadata_row)
+        subsection_row = {"type": "Patient treatment"}
+        attributes = []
+        treatment_response = patient_treatment_metadata_row["response"]
+        processed_treatment_data_entries = process_treatment_data_entries(
+            patient_treatment_metadata_row["entries"]
+        )
+        # {"names": "+".join(names), "doses": "+".join(doses), "links": links}
+        treatment_names = processed_treatment_data_entries["names"]
+        doses = processed_treatment_data_entries["doses"]
+        links = processed_treatment_data_entries["links"]
+        for link in links:
+            biostudies_link = format_link(link)
+            biostudies_links.append(biostudies_link)
+
+        attributes.append({"name": "Treatment", "value": treatment_names})
+
+        attributes.append({"name": "Dose", "value": doses})
+
+        attributes.append({"name": "Response", "value": treatment_response})
+
+        subsection_row["attributes"] = attributes
+
+        rows.append(subsection_row)
+
+    return rows, biostudies_links
+
+
+def format_link(link):
+    biostudies_link = {}
+    attributes = []
+    biostudies_link["url"] = link["url"]
+    attributes.append({"name": "Description", "value": link["label"]})
+    attributes.append({"name": "Type", "value": link["resource"].lower()})
+    biostudies_link["attributes"] = attributes
+
+
 def clean_file_name(original_name):
     clean = re.sub(r"[\s/\\?%*:|\"<>\x7F\x00-\x1F]", "-", original_name)
     return clean
@@ -381,6 +437,26 @@ def fetch_molecular_data(
     file_size = os.path.getsize(file_path)
     print("file size :", file_size, "bytes")
     return file_path, file_size
+
+
+def process_treatment_data_entries(entries: list):
+    names = []
+    doses = []
+    links = []
+
+    for entry in entries:
+        names.append(entry["name"])
+        doses.append(entry["dose"])
+        if entry["external_db_links"]:
+            for external_db_link in entry["external_db_links"]:
+                print("external_db_link--->", external_db_link)
+                link = {
+                    "label": entry["name"],
+                    "url": external_db_link["link"],
+                    "resource": external_db_link["resource_label"],
+                }
+                links.append(link)
+    return {"names": " + ".join(names), "doses": " + ".join(set(doses)), "links": links}
 
 
 def write_molecular_data_file(data, file_path, fields):
