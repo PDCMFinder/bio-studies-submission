@@ -1,3 +1,4 @@
+from datetime import date
 import os
 import requests
 import urllib.parse
@@ -134,8 +135,13 @@ def fetch_and_process_data(output):
 def format_model(model, model_folder_path):
     study = {}
     study["accno"] = model["external_model_id"] + "_" + model["data_source"]
-    # Should it br submission or another type?
     study["type"] = "submission"
+
+    attributes = []
+    attributes.append({"name": "Title", "value": model["histology"]})
+    attributes.append({"name": "ReleaseDate", "value": str(date.today())})
+
+    study["attributes"] = attributes
 
     section = create_study_section(model, model_folder_path)
     study["section"] = section
@@ -147,7 +153,9 @@ def create_study_section(model, model_folder_path):
     study_section = {}
     study_section["accno"] = STUDY_SECTION_ID
     study_section["type"] = "Study"
+
     attributes = []
+    attributes.append({"name": "Model ID", "value": model["external_model_id"]})
     attributes.append({"name": "Title", "value": model["histology"]})
     attributes.append({"name": "Study type", "value": model["model_type"]})
     study_section["attributes"] = attributes
@@ -167,15 +175,13 @@ def add_subsections(study_section, model, model_folder_path):
         )
         subsections.append(pdx_model_engraftment_subsection)
     quality_control_subsection = create_model_quality_control_subsection(model)
-    molecular_data_subsection = create_molecular_data_subsection(
-        model, model_folder_path
+    molecular_data_subsection, molecular_data_files_section = (
+        create_molecular_data_subsection(model, model_folder_path)
     )
-    patient_treatment_subsection, patient_treatment_links = (
-        create_patient_treatment_subsection(model)
-    )
-    print("patient_treatment_links -->", patient_treatment_links)
+    patient_treatment_subsection = create_patient_treatment_subsection(model)
 
     subsections.append(molecular_data_subsection)
+    subsections.append(molecular_data_files_section)
 
     subsections.append(quality_control_subsection)
     subsections.append(patient_treatment_subsection)
@@ -268,87 +274,166 @@ def create_model_quality_control_subsection(model):
     return rows
 
 
-def create_molecular_data_subsection(model, model_folder_path):
-    # Data will be represented as a section with files
-    molecular_data_subsection = {"type": "Molecular data"}
-    files = []
-
-    url = (
-        f"{MODEL_MOLECULAR_METADATA_ENDPOINT}?model_id=eq.{model['external_model_id']}"
-    )
-
+def fetch_molecular_metadata_per_model(external_model_id):
+    url = f"{MODEL_MOLECULAR_METADATA_ENDPOINT}?model_id=eq.{external_model_id}"
     response = requests.get(url)
     response.raise_for_status()
     data = response.json()
 
-    # Process each model in the current batch
+    return data
+
+
+def create_molecular_data_subsection(model, model_folder_path):
+    # The molecular data subsection has 2 main components:
+    # 1) A table showing the molecular metadata attributes
+    # 2) A section with the files containing the actual molecular data
+
+    # Note: The files must be located as the last section. Otherwise they don't render
+
+    molecular_metadata_sections = []
+    data = fetch_molecular_metadata_per_model(model["external_model_id"])
+
+    # molecular_data_subsection = {"type": "Molecular data"}
+    files = []
+
+    # Process each row of molecular metadata
     for model_molecular_metadata_row in data:
-        sample_id = model_molecular_metadata_row["sample_id"]
-        data_type = model_molecular_metadata_row["data_type"]
-        platform_name = model_molecular_metadata_row["platform_name"]
-        molecular_characterization_id = model_molecular_metadata_row[
-            "molecular_characterization_id"
+        # Create row for the table
+        row = create_molecular_metadata_row(model_molecular_metadata_row)
+        molecular_metadata_sections.append(row)
+
+        molecular_data_file = create_molecular_data_file(
+            model_molecular_metadata_row, model_folder_path
+        )
+
+        if molecular_data_file:
+            files.append(molecular_data_file)
+
+    # Add a section at the end with the files
+    files_section = {}
+    files_section["files"] = files
+
+    return molecular_metadata_sections, files_section
+
+
+def get_sample_type_by_source(sample_source):
+    sample_type = ""
+
+    if sample_source == "xenograft":
+        sample_type = "Engrafted Tumour"
+    elif sample_source == "patient":
+        sample_type = "Patient Tumour"
+    else:
+        sample_type = "Tumour Cells"
+    return sample_type
+
+
+def create_molecular_metadata_row(model_molecular_metadata_row):
+    molecular_metadata_row = {"type": "Molecular data"}
+    attributes = []
+
+    attributes.append(
+        {"name": "Sample ID", "value": model_molecular_metadata_row["sample_id"]}
+    )
+    sample_type = get_sample_type_by_source(model_molecular_metadata_row["source"])
+    attributes.append({"name": "Sample Type", "value": sample_type})
+    attributes.append(
+        {
+            "name": "Engrafted Tumour Passage",
+            "value": model_molecular_metadata_row["xenograft_passage"],
+        }
+    )
+    attributes.append(
+        {"name": "Data Type", "value": model_molecular_metadata_row["data_type"]}
+    )
+    attributes.append(
+        {
+            "name": "Platform Used",
+            "value": model_molecular_metadata_row["platform_name"],
+        }
+    )
+    external_links = model_molecular_metadata_row["external_db_links"]
+
+    eva_raw_data_column = create_raw_data_column(external_links, "ENA")
+    ega_raw_data_column = create_raw_data_column(external_links, "EGA")
+    geo_raw_data_column = create_raw_data_column(external_links, "GEO")
+    dbGap_raw_data_column = create_raw_data_column(external_links, "dbGAP")
+
+    attributes.append(eva_raw_data_column)
+    attributes.append(ega_raw_data_column)
+    attributes.append(geo_raw_data_column)
+    attributes.append(dbGap_raw_data_column)
+
+    molecular_metadata_row["attributes"] = attributes
+    return molecular_metadata_row
+
+
+def create_raw_data_column(external_links, name):
+    link_obj = get_link_by_resource(external_links, name)
+    url = None
+    if link_obj:
+        url = link_obj["link"]
+    attribute = {"name": name}
+    if url:
+        attribute["value"] = name
+        attribute["valqual"] = [
+            {
+                "name": "url",
+                "value": url,
+            }
         ]
+    return attribute
 
-        file_path, size = fetch_molecular_data(
-            model["external_model_id"],
-            sample_id,
-            data_type,
-            platform_name,
-            molecular_characterization_id,
-            model_folder_path,
-        )
 
-        if size == 0:
-            continue
+def create_molecular_data_file(
+    model_molecular_metadata_row,
+    model_folder_path,
+):
+    sample_id = model_molecular_metadata_row["sample_id"]
+    data_type = model_molecular_metadata_row["data_type"]
+    platform_name = model_molecular_metadata_row["platform_name"]
+    molecular_characterization_id = model_molecular_metadata_row[
+        "molecular_characterization_id"
+    ]
 
-        file = {"path": file_path.split("/", 1)[1]}
-        file["type"] = "file"
-        file["size"] = size
+    model_molecular_metadata_row["sample_id"]
+    # Creates the file with the molecular data
+    file_path, size = fetch_molecular_data(
+        sample_id,
+        data_type,
+        platform_name,
+        molecular_characterization_id,
+        model_folder_path,
+    )
 
-        source = model_molecular_metadata_row["source"]
-        sample_type = ""
-        if source == "xenograft":
-            sample_type = "Engrafted Tumour"
-        elif source == "patient":
-            sample_type = "Patient Tumour"
-        else:
-            sample_type = "Tumour Cells"
-        attributes = []
-        if model_molecular_metadata_row["data_restricted"] == "TRUE":
-            attributes.append({"name": "Request e-mail", "value": model["email_list"]})
-        else:
-            attributes.append({"name": "Request e-mail"})
-        attributes.append({"name": "Sample ID", "value": sample_id})
-        attributes.append({"name": "Sample Type", "value": sample_type})
-        attributes.append(
-            {
-                "name": "Engrafted Tumour Passage",
-                "value": model_molecular_metadata_row["xenograft_passage"],
-            }
-        )
-        attributes.append(
-            {"name": "Data Type", "value": model_molecular_metadata_row["data_type"]}
-        )
-        attributes.append(
-            {
-                "name": "Platform Used",
-                "value": model_molecular_metadata_row["platform_name"],
-            }
-        )
-        attributes.append(
-            {
-                "name": "Raw Data",
-                "value": model_molecular_metadata_row["external_db_links"],
-            }
-        )
-        file["attributes"] = attributes
+    if size == 0:
+        return None
 
-        files.append(file)
+    file = {"path": file_path.split("/", 1)[1]}
+    file["type"] = "file"
+    file["size"] = size
 
-    molecular_data_subsection["files"] = files
+    attributes = []
 
-    return molecular_data_subsection
+    attributes.append({"name": "Sample ID", "value": sample_id})
+    sample_type = get_sample_type_by_source(model_molecular_metadata_row["source"])
+    attributes.append({"name": "Sample Type", "value": sample_type})
+    attributes.append(
+        {
+            "name": "Engrafted Tumour Passage",
+            "value": model_molecular_metadata_row["xenograft_passage"],
+        }
+    )
+    attributes.append({"name": "Data Type", "value": data_type})
+    attributes.append(
+        {
+            "name": "Platform Used",
+            "value": platform_name,
+        }
+    )
+    file["attributes"] = attributes
+
+    return file
 
 
 def create_patient_treatment_subsection(model):
@@ -356,7 +441,6 @@ def create_patient_treatment_subsection(model):
     biostudies_links = []
 
     url = f"{PATIENT_TREATMENT_ENDPOINT}?model_id=eq.{model['pdcm_model_id']}"
-    print("url:::", url)
 
     response = requests.get(url)
     response.raise_for_status()
@@ -364,14 +448,12 @@ def create_patient_treatment_subsection(model):
 
     # Process each model in the current batch
     for patient_treatment_metadata_row in data:
-        print("patient_treatment_metadata_row-->", patient_treatment_metadata_row)
         subsection_row = {"type": "Patient treatment"}
         attributes = []
         treatment_response = patient_treatment_metadata_row["response"]
         processed_treatment_data_entries = process_treatment_data_entries(
             patient_treatment_metadata_row["entries"]
         )
-        # {"names": "+".join(names), "doses": "+".join(doses), "links": links}
         treatment_names = processed_treatment_data_entries["names"]
         doses = processed_treatment_data_entries["doses"]
         links = processed_treatment_data_entries["links"]
@@ -389,7 +471,13 @@ def create_patient_treatment_subsection(model):
 
         rows.append(subsection_row)
 
-    return rows, biostudies_links
+    # print("...")
+    # print("Links::", json.dumps(biostudies_links))
+    # print("...")
+
+    # subsection_row["links"] = biostudies_links
+
+    return rows
 
 
 def format_link(link):
@@ -399,6 +487,15 @@ def format_link(link):
     attributes.append({"name": "Description", "value": link["label"]})
     attributes.append({"name": "Type", "value": link["resource"].lower()})
     biostudies_link["attributes"] = attributes
+    return biostudies_link
+
+
+def get_link_by_resource(links, resource):
+    if links:
+        for link in links:
+            if link["resource"] == resource:
+                return link
+    return None
 
 
 def clean_file_name(original_name):
@@ -407,7 +504,6 @@ def clean_file_name(original_name):
 
 
 def fetch_molecular_data(
-    model_name,
     sample_id,
     data_type,
     platform_name,
@@ -435,7 +531,6 @@ def fetch_molecular_data(
     write_molecular_data_file(data, file_path, fields)
 
     file_size = os.path.getsize(file_path)
-    print("file size :", file_size, "bytes")
     return file_path, file_size
 
 
@@ -449,7 +544,6 @@ def process_treatment_data_entries(entries: list):
         doses.append(entry["dose"])
         if entry["external_db_links"]:
             for external_db_link in entry["external_db_links"]:
-                print("external_db_link--->", external_db_link)
                 link = {
                     "label": entry["name"],
                     "url": external_db_link["link"],
@@ -483,8 +577,6 @@ def write_molecular_data_file(data, file_path, fields):
 def main(output):
     create_folder_if_not_exists(output)
     processed_data = fetch_and_process_data(output)
-
-    print("done", processed_data)
 
 
 if __name__ == "__main__":
