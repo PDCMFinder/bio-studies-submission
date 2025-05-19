@@ -115,9 +115,8 @@ def fetch_and_process_data(output):
 
         # Process each model in the current batch
         for model in data:
-            model_folder_path = (
-                output + "/" + model["external_model_id"] + "_" + model["data_source"]
-            )
+            data_source = model["data_source"]
+            model_folder_path = f"{output}/{data_source}/{model['external_model_id']}"
             create_folder_if_not_exists(model_folder_path)
             study = format_model(model, model_folder_path)
 
@@ -403,7 +402,9 @@ def create_molecular_data_file(
     molecular_characterization_id = model_molecular_metadata_row[
         "molecular_characterization_id"
     ]
-    print("data_type==>", data_type)
+
+    download_path = f"{model_folder_path}/molecular_data"
+    create_folder_if_not_exists(download_path)
 
     model_molecular_metadata_row["sample_id"]
     # Creates the file with the molecular data
@@ -412,7 +413,7 @@ def create_molecular_data_file(
         data_type,
         platform_name,
         molecular_characterization_id,
-        model_folder_path,
+        download_path,
     )
 
     if size == 0:
@@ -710,7 +711,6 @@ def process_treatment_data_entries(entries: list):
 
 
 def write_molecular_data_file(data, file_path, fields):
-    print(f"write_molecular_data_file:[BIG][{file_path}][{fields}]")
     lines = []
     num_lines = 0
     # First line corresponds to the headers of the file
@@ -737,23 +737,12 @@ def get_publication_data(pub_id):
     if pub_id == "":
         return None
     url = f"https://www.ebi.ac.uk/europepmc/webservices/rest/article/MED/{pub_id.replace('PMID:', '')}?resultType=lite&format=json"
-    print("URL", url)
 
     response = requests.get(url)
     response.raise_for_status()
     data = response.json()
 
     result = data["result"]
-
-    # atributes.append({"name": "PMID", "value": publication["pmid"]})
-    #     atributes.append({"name": "Authors", "value": publication["authorString"]})
-    #     atributes.append({"name": "Title", "value": publication["title"]})
-    #     atributes.append({"name": "Year", "value": publication["pubYear"]})
-    #     atributes.append({"name": "Volume", "value": publication["journalVolume"]})
-    #     atributes.append({"name": "Issue", "value": publication["issue"]})
-    #     atributes.append({"name": "Type", "value": publication["pubType"]})
-    #     atributes.append({"name": "Issn", "value": publication["journalIssn"]})
-    #     atributes.append({"name": "DOI", "value": publication["doi"]})
 
     return {
         "title": result["title"],
@@ -767,30 +756,6 @@ def get_publication_data(pub_id):
         "pmid": result["pmid"],
         "doi": result["doi"],
     }
-
-
-# export async function getPublicationData(pubmedId: string) {
-#   if (pubmedId !== "") {
-#     let response = await fetch(
-#       `https://www.ebi.ac.uk/europepmc/webservices/rest/article/MED/${pubmedId.replace(
-#         "PMID:",
-#         ""
-#       )}?resultType=lite&format=json`
-#     );
-#     if (!response.ok) {
-#       throw new Error("Network response was not ok");
-#     }
-#     return response
-#       .json()
-#       .then((d) =>
-#         Object.fromEntries(
-#           ["title", "pubYear", "authorString", "journalTitle", "pmid", "doi"]
-#             .filter((key) => key in d.result)
-#             .map((key) => [key, d.result[key]])
-#         )
-#       );
-#   }
-# }
 
 
 # Main function
