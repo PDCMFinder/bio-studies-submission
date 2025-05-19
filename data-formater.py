@@ -25,12 +25,15 @@ COLUMNS_TO_READ = [
     "xenograft_model_specimens",
     "quality_assurance",
     "email_list",
+    "pdx_model_publications",
+    "model_relationships",
     "data_source",
 ]
 
 BASE_URL = "https://dev.cancermodels.org/api/"
 SEARCH_INDEX_ENDPOINT = BASE_URL + "search_index"
 MODEL_MOLECULAR_METADATA_ENDPOINT = BASE_URL + "model_molecular_metadata"
+DOSING_STUDIES_ENDPOINT = BASE_URL + "dosing_studies"
 PATIENT_TREATMENT_ENDPOINT = BASE_URL + "patient_treatment"
 RELEASE_ENDPOINT = BASE_URL + "release_info"
 PARAMS = {
@@ -104,8 +107,6 @@ def fetch_and_process_data(output):
         filter_str = f"external_model_id={quoted_value}"
         final_url = f"{SEARCH_INDEX_ENDPOINT}?{params_str}&{filter_str}"
 
-        # print("final_url", final_url)
-
         response = requests.get(final_url)
         response.raise_for_status()
         data = response.json()
@@ -178,13 +179,18 @@ def add_subsections(study_section, model, model_folder_path):
     molecular_data_subsection, molecular_data_files_section = (
         create_molecular_data_subsection(model, model_folder_path)
     )
+    model_treatment_subsection = create_model_treatment_subsection(model)
     patient_treatment_subsection = create_patient_treatment_subsection(model)
-
+    publication_subsection = create_publication_subsection(model)
+    related_models_subsection = create_related_models_subsection(model)
+    subsections.append(quality_control_subsection)
     subsections.append(molecular_data_subsection)
     subsections.append(molecular_data_files_section)
-
-    subsections.append(quality_control_subsection)
+    subsections.append(model_treatment_subsection)
     subsections.append(patient_treatment_subsection)
+    subsections.append(publication_subsection)
+    subsections.append(related_models_subsection)
+
     study_section["subsections"] = subsections
     return study_section
 
@@ -354,10 +360,10 @@ def create_molecular_metadata_row(model_molecular_metadata_row):
     )
     external_links = model_molecular_metadata_row["external_db_links"]
 
-    eva_raw_data_column = create_raw_data_column(external_links, "ENA")
-    ega_raw_data_column = create_raw_data_column(external_links, "EGA")
-    geo_raw_data_column = create_raw_data_column(external_links, "GEO")
-    dbGap_raw_data_column = create_raw_data_column(external_links, "dbGAP")
+    eva_raw_data_column = create_url_attribute(external_links, "ENA")
+    ega_raw_data_column = create_url_attribute(external_links, "EGA")
+    geo_raw_data_column = create_url_attribute(external_links, "GEO")
+    dbGap_raw_data_column = create_url_attribute(external_links, "dbGAP")
 
     attributes.append(eva_raw_data_column)
     attributes.append(ega_raw_data_column)
@@ -368,7 +374,7 @@ def create_molecular_metadata_row(model_molecular_metadata_row):
     return molecular_metadata_row
 
 
-def create_raw_data_column(external_links, name):
+def create_url_attribute(external_links, name):
     link_obj = get_link_by_resource(external_links, name)
     url = None
     if link_obj:
@@ -436,9 +442,66 @@ def create_molecular_data_file(
     return file
 
 
+def create_immune_markers_subsection(model):
+    immune_markers_subsection = {"type": "Immune markers"}
+    attributes = []
+    url = f"{BASE_URL}/immunemarker_data_extended?model_id=eq.{model['external_model_id']}"
+
+    response = requests.get(url)
+    response.raise_for_status()
+    data = response.json()
+
+    for row in data:
+        additional_data = row["essential_or_additional_details"]
+        marker_value = row["marker_value"]
+        if additional_data:
+            marker_value = f"{marker_value} ({additional_data})"
+        attributes.append({"name": row["marker_name"], "value": marker_value})
+    immune_markers_subsection["attributes"] = attributes
+
+
+def create_model_treatment_subsection(model):
+    rows = []
+
+    url = f"{DOSING_STUDIES_ENDPOINT}?model_id=eq.{model['pdcm_model_id']}"
+
+    response = requests.get(url)
+    response.raise_for_status()
+    data = response.json()
+
+    # Process each model in the current batch
+    for model_treatment_metadata_row in data:
+        subsection_row = {"type": "Model treatment"}
+        attributes = []
+        treatment_response = model_treatment_metadata_row["response"]
+        processed_treatment_data_entries = process_treatment_data_entries(
+            model_treatment_metadata_row["entries"]
+        )
+        ...
+        treatment_names = processed_treatment_data_entries["names"]
+        doses = processed_treatment_data_entries["doses"]
+        links = processed_treatment_data_entries["links"]
+        passage_range = model_treatment_metadata_row["passage_range"]
+
+        attributes.append({"name": "Drug", "value": treatment_names})
+        attributes.append({"name": "Dose", "value": doses})
+        attributes.append({"name": "Passage", "value": passage_range})
+        attributes.append({"name": "Response", "value": treatment_response})
+        chembl_attribute = create_url_attribute(links, "ChEMBL")
+        pubchem_attribute = create_url_attribute(links, "PubChem")
+
+        attributes.append(chembl_attribute)
+        attributes.append(pubchem_attribute)
+
+        subsection_row["attributes"] = attributes
+
+        rows.append(subsection_row)
+
+    return rows
+
+
 def create_patient_treatment_subsection(model):
     rows = []
-    biostudies_links = []
 
     url = f"{PATIENT_TREATMENT_ENDPOINT}?model_id=eq.{model['pdcm_model_id']}"
 
@@ -457,27 +520,117 @@ def create_patient_treatment_subsection(model):
         treatment_names = processed_treatment_data_entries["names"]
         doses = processed_treatment_data_entries["doses"]
         links = processed_treatment_data_entries["links"]
-        for link in links:
-            biostudies_link = format_link(link)
-            biostudies_links.append(biostudies_link)
 
         attributes.append({"name": "Treatment", "value": treatment_names})
 
         attributes.append({"name": "Dose", "value": doses})
 
         attributes.append({"name": "Response", "value": treatment_response})
+        chembl_attribute = create_url_attribute(links, "ChEMBL")
+        pubchem_attribute = create_url_attribute(links, "PubChem")
+
+        attributes.append(chembl_attribute)
+        attributes.append(pubchem_attribute)
 
         subsection_row["attributes"] = attributes
 
         rows.append(subsection_row)
 
-    # print("...")
-    # print("Links::", json.dumps(biostudies_links))
-    # print("...")
-
-    # subsection_row["links"] = biostudies_links
-
     return rows
+
+
+def create_publication_subsection(model):
+    publications_ids = model["pdx_model_publications"]
+    publications_ids = publications_ids.replace(" ", "").split(",")
+    publications = [get_publication_data(val) for val in publications_ids]
+
+    rows = []
+
+    for publication in publications:
+        row = {"type": "Publications"}
+        atributes = []
+        pmid = publication["pmid"]
+
+        atributes.append({"name": "Title", "value": publication["title"]})
+        atributes.append({"name": "Authors", "value": publication["authorString"]})
+        atributes.append({"name": "Year", "value": publication["pubYear"]})
+        atributes.append({"name": "Volume", "value": publication["journalVolume"]})
+        atributes.append({"name": "Issue", "value": publication["issue"]})
+        atributes.append({"name": "Issn", "value": publication["journalIssn"]})
+
+        atributes.append(
+            {
+                "name": "EuropePMC",
+                "value": "EuropePMC",
+                "valqual": [
+                    {
+                        "name": "url",
+                        "value": f"https://europepmc.org/article/MED/{pmid}",
+                    }
+                ],
+            }
+        )
+
+        doi = publication["doi"]
+        atributes.append(
+            {
+                "name": "DOI",
+                "value": f"DOI:{doi}",
+                "valqual": [
+                    {
+                        "name": "url",
+                        "value": f"https://dx.doi.org/{doi}",
+                    }
+                ],
+            }
+        )
+
+        atributes.append(
+            {
+                "name": "PubMed",
+                "value": "PubMed",
+                "valqual": [
+                    {
+                        "name": "url",
+                        "value": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}",
+                    }
+                ],
+            }
+        )
+
+        row["attributes"] = atributes
+        rows.append(row)
+    return rows
+
+
+def create_related_models_subsection(model):
+    related_models_subsection = {"type": "Related models"}
+    model_relationships = model["model_relationships"]
+    links = []
+    parent = model_relationships["parents"]
+    if parent and parent != "null":
+        parent = parent[0]["external_model_id"]
+        link = {"url": parent}
+        attributes = [
+            {"name": "Type", "value": "BioStudies"},
+            {"name": "Role", "value": "child of"},
+        ]
+        link["attributes"] = attributes
+        links.append(link)
+    children = model_relationships["children"]
+    if children and children != []:
+        for child in children:
+            child = child["external_model_id"]
+            link = {"url": child}
+            attributes = [
+                {"name": "Type", "value": "BioStudies"},
+                {"name": "Role", "value": "parent of"},
+            ]
+            link["attributes"] = attributes
+            links.append(link)
+
+    related_models_subsection["links"] = links
+    return related_models_subsection
 
 
 def format_link(link):
@@ -546,7 +699,7 @@ def process_treatment_data_entries(entries: list):
             for external_db_link in entry["external_db_links"]:
                 link = {
                     "label": entry["name"],
-                    "url": external_db_link["link"],
+                    "link": external_db_link["link"],
                     "resource": external_db_link["resource_label"],
                 }
                 links.append(link)
@@ -571,6 +724,66 @@ def write_molecular_data_file(data, file_path, fields):
         for line in lines:
             f.write(line)
             f.write("\n")
+
+
+def get_publication_data(pub_id):
+    if pub_id == "":
+        return None
+    url = f"https://www.ebi.ac.uk/europepmc/webservices/rest/article/MED/{pub_id.replace('PMID:', '')}?resultType=lite&format=json"
+    print("URL", url)
+
+    response = requests.get(url)
+    response.raise_for_status()
+    data = response.json()
+
+    result = data["result"]
+
+    # atributes.append({"name": "PMID", "value": publication["pmid"]})
+    #     atributes.append({"name": "Authors", "value": publication["authorString"]})
+    #     atributes.append({"name": "Title", "value": publication["title"]})
+    #     atributes.append({"name": "Year", "value": publication["pubYear"]})
+    #     atributes.append({"name": "Volume", "value": publication["journalVolume"]})
+    #     atributes.append({"name": "Issue", "value": publication["issue"]})
+    #     atributes.append({"name": "Type", "value": publication["pubType"]})
+    #     atributes.append({"name": "Issn", "value": publication["journalIssn"]})
+    #     atributes.append({"name": "DOI", "value": publication["doi"]})
+
+    return {
+        "title": result["title"],
+        "pubYear": result["pubYear"],
+        "authorString": result["authorString"],
+        "journalTitle": result["journalTitle"],
+        "journalVolume": result["journalVolume"],
+        "journalIssn": result["journalIssn"],
+        "issue": result["issue"],
+        "pubType": result["pubType"],
+        "pmid": result["pmid"],
+        "doi": result["doi"],
+    }
+
+
+# export async function getPublicationData(pubmedId: string) {
+#   if (pubmedId !== "") {
+#     let response = await fetch(
+#       `https://www.ebi.ac.uk/europepmc/webservices/rest/article/MED/${pubmedId.replace(
+#         "PMID:",
+#         ""
+#       )}?resultType=lite&format=json`
+#     );
+#     if (!response.ok) {
+#       throw new Error("Network response was not ok");
+#     }
+#     return response
+#       .json()
+#       .then((d) =>
+#         Object.fromEntries(
+#           ["title", "pubYear", "authorString", "journalTitle", "pmid", "doi"]
+#             .filter((key) => key in d.result)
+#             .map((key) => [key, d.result[key]])
+#         )
+#       );
+#   }
+# }
 
 
 # Main function
