@@ -54,7 +54,7 @@ MOLECULAR_DATA_TABLES = {
 MOLECULAR_DATA_FIELDS = {
     "copy number alteration": [
         "hgnc_symbol",
-        "cromosome",
+        "chromosome",
         "strand",
         "log10r_cna",
         "log2r_cna",
@@ -79,7 +79,7 @@ MOLECULAR_DATA_FIELDS = {
     "mutation": [
         "hgnc_symbol",
         "amino_acid_change",
-        "cromosome",
+        "chromosome",
         "strand",
         "consequence",
         "read_depth",
@@ -103,6 +103,8 @@ def fetch_and_process_data(output):
     total_count = 0
     while True:
         quoted_value = urllib.parse.quote('in.("HBCx-118")', safe="(),")
+        # TM00199
+        quoted_value = urllib.parse.quote('in.("TM00199")', safe="(),")
         params_str = urllib.parse.urlencode(PARAMS)
         filter_str = f"external_model_id={quoted_value}"
         final_url = f"{SEARCH_INDEX_ENDPOINT}?{params_str}&{filter_str}"
@@ -401,6 +403,7 @@ def create_molecular_data_file(
     molecular_characterization_id = model_molecular_metadata_row[
         "molecular_characterization_id"
     ]
+    print("data_type==>", data_type)
 
     model_molecular_metadata_row["sample_id"]
     # Creates the file with the molecular data
@@ -707,6 +710,7 @@ def process_treatment_data_entries(entries: list):
 
 
 def write_molecular_data_file(data, file_path, fields):
+    print(f"write_molecular_data_file:[BIG][{file_path}][{fields}]")
     lines = []
     num_lines = 0
     # First line corresponds to the headers of the file
@@ -715,7 +719,10 @@ def write_molecular_data_file(data, file_path, fields):
         values = []
         for field in fields:
             value = row[field]
-            values.append(value)
+            if value is None:
+                values.append("")
+            else:
+                values.append(str(value))
             num_lines += 1
         lines.append("\t".join(values))
 
