@@ -27,6 +27,7 @@ COLUMNS_TO_READ = [
     "email_list",
     "pdx_model_publications",
     "model_relationships",
+    "model_images",
     "data_source",
 ]
 
@@ -104,7 +105,7 @@ def fetch_and_process_data(output):
     while True:
         quoted_value = urllib.parse.quote('in.("HBCx-118")', safe="(),")
         # TM00199
-        quoted_value = urllib.parse.quote('in.("TM00199")', safe="(),")
+        quoted_value = urllib.parse.quote('in.("HCM-CSHL-0729-C18")', safe="(),")
         params_str = urllib.parse.urlencode(PARAMS)
         filter_str = f"external_model_id={quoted_value}"
         final_url = f"{SEARCH_INDEX_ENDPOINT}?{params_str}&{filter_str}"
@@ -120,6 +121,11 @@ def fetch_and_process_data(output):
             create_folder_if_not_exists(model_folder_path)
             study = format_model(model, model_folder_path)
 
+            json_file_name = f"{model_folder_path}/{model['external_model_id']}.json"
+
+            with open(json_file_name, "w") as f:
+                f.write(json.dumps(study, indent=2))
+
             print(json.dumps(study))
 
         # Update metadata
@@ -134,14 +140,18 @@ def fetch_and_process_data(output):
     return processed_data
 
 
+def create_attribute(name, value):
+    return {"name": name, "value": value if value else "N/A"}
+
+
 def format_model(model, model_folder_path):
     study = {}
     study["accno"] = model["external_model_id"] + "_" + model["data_source"]
     study["type"] = "submission"
 
     attributes = []
-    attributes.append({"name": "Title", "value": model["histology"]})
-    attributes.append({"name": "ReleaseDate", "value": str(date.today())})
+    attributes.append(create_attribute("Title", model["histology"]))
+    attributes.append(create_attribute("ReleaseDate", str(date.today())))
 
     study["attributes"] = attributes
 
@@ -157,40 +167,37 @@ def create_study_section(model, model_folder_path):
     study_section["type"] = "Study"
 
     attributes = []
-    attributes.append({"name": "Model ID", "value": model["external_model_id"]})
-    attributes.append({"name": "Title", "value": model["histology"]})
-    attributes.append({"name": "Study type", "value": model["model_type"]})
+    attributes.append(create_attribute("Model ID", model["external_model_id"]))
+    attributes.append(create_attribute("Title", model["histology"]))
+    attributes.append(create_attribute("Study type", model["model_type"]))
     study_section["attributes"] = attributes
     study_section = add_subsections(study_section, model, model_folder_path)
     return study_section
 
 
+def add_section_if_not_null(current_subsections, new_subsection):
+    if new_subsection is not None and new_subsection != []:
+        current_subsections.append(new_subsection)
+
+
 def add_subsections(study_section, model, model_folder_path):
     subsections = []
-    organization_section = create_organization_section(model)
-    subsections.append(organization_section)
-    patient_tumor_subsection = create_patient_tumor_subsection(model)
-    subsections.append(patient_tumor_subsection)
+    add_section_if_not_null(subsections, create_organization_section(model))
+    add_section_if_not_null(subsections, create_patient_tumor_subsection(model))
     if model["model_type"] == "PDX":
-        pdx_model_engraftment_subsection = create_pdx_model_engraftment_subsection(
-            model
+        add_section_if_not_null(
+            subsections, create_pdx_model_engraftment_subsection(model)
         )
-        subsections.append(pdx_model_engraftment_subsection)
-    quality_control_subsection = create_model_quality_control_subsection(model)
-    molecular_data_subsection, molecular_data_files_section = (
-        create_molecular_data_subsection(model, model_folder_path)
+    add_section_if_not_null(subsections, create_model_quality_control_subsection(model))
+    add_section_if_not_null(
+        subsections, create_molecular_data_subsection(model, model_folder_path)
     )
-    model_treatment_subsection = create_model_treatment_subsection(model)
-    patient_treatment_subsection = create_patient_treatment_subsection(model)
-    publication_subsection = create_publication_subsection(model)
-    related_models_subsection = create_related_models_subsection(model)
-    subsections.append(quality_control_subsection)
-    subsections.append(molecular_data_subsection)
-    subsections.append(molecular_data_files_section)
-    subsections.append(model_treatment_subsection)
-    subsections.append(patient_treatment_subsection)
-    subsections.append(publication_subsection)
-    subsections.append(related_models_subsection)
+    add_section_if_not_null(subsections, create_immune_markers_subsection(model))
+    add_section_if_not_null(subsections, create_model_treatment_subsection(model))
+    add_section_if_not_null(subsections, create_patient_treatment_subsection(model))
+    add_section_if_not_null(subsections, create_histology_images_section(model))
+    add_section_if_not_null(subsections, create_publication_subsection(model))
+    add_section_if_not_null(subsections, create_related_models_subsection(model))
 
     study_section["subsections"] = subsections
     return study_section
@@ -199,7 +206,7 @@ def add_subsections(study_section, model, model_folder_path):
 def create_organization_section(model):
     organization_section = {"accno": "o1", "type": "Organization"}
     organization_section["attributes"] = [
-        {"name": "Name", "value": model["provider_name"]}
+        create_attribute("Name", model["provider_name"])
     ]
     return organization_section
 
@@ -232,23 +239,20 @@ def create_pdx_model_engraftment_subsection(model):
         attributes = []
 
         subsection_row["type"] = "PDX model engraftment"
+        attributes.append(create_attribute("Host Strain Name", row["host_strain_name"]))
         attributes.append(
-            {"name": "Host Strain Name", "value": row["host_strain_name"]}
-        )
-        attributes.append(
-            {
-                "name": "Host Strain Nomenclature",
-                "value": row["host_strain_nomenclature"],
-            }
+            create_attribute(
+                "Host Strain Nomenclature", row["host_strain_nomenclature"]
+            )
         )
 
-        attributes.append({"name": "Site", "value": row["engraftment_site"]})
-        attributes.append({"name": "Type", "value": row["engraftment_type"]})
-        attributes.append({"name": "Material", "value": row["engraftment_sample_type"]})
+        attributes.append(create_attribute("Site", row["engraftment_site"]))
+        attributes.append(create_attribute("Type", row["engraftment_type"]))
+        attributes.append(create_attribute("Material", row["engraftment_sample_type"]))
         attributes.append(
-            {"name": "Material Status", "value": row["engraftment_sample_state"]}
+            create_attribute("Material Status", row["engraftment_sample_state"])
         )
-        attributes.append({"name": "Passage", "value": row["passage_number"]})
+        attributes.append(create_attribute("Passage", row["passage_number"]))
 
         subsection_row["attributes"] = attributes
         rows.append(subsection_row)
@@ -265,15 +269,15 @@ def create_model_quality_control_subsection(model):
         attributes = []
 
         subsection_row["type"] = "Model quality control"
-        attributes.append({"name": "Technique", "value": row["validation_technique"]})
+        attributes.append(create_attribute("Technique", row["validation_technique"]))
         attributes.append(
-            {
-                "name": "Description",
-                "value": row["description"],
-            }
+            create_attribute(
+                "Description",
+                row["description"],
+            )
         )
 
-        attributes.append({"name": "Passage", "value": row["passages_tested"]})
+        attributes.append(create_attribute("Passage", row["passages_tested"]))
 
         subsection_row["attributes"] = attributes
         rows.append(subsection_row)
@@ -340,24 +344,24 @@ def create_molecular_metadata_row(model_molecular_metadata_row):
     attributes = []
 
     attributes.append(
-        {"name": "Sample ID", "value": model_molecular_metadata_row["sample_id"]}
+        create_attribute("Sample ID", model_molecular_metadata_row["sample_id"])
     )
     sample_type = get_sample_type_by_source(model_molecular_metadata_row["source"])
-    attributes.append({"name": "Sample Type", "value": sample_type})
+    attributes.append(create_attribute("Sample Type", sample_type))
     attributes.append(
-        {
-            "name": "Engrafted Tumour Passage",
-            "value": model_molecular_metadata_row["xenograft_passage"],
-        }
+        create_attribute(
+            "Engrafted Tumour Passage",
+            model_molecular_metadata_row["xenograft_passage"],
+        )
     )
     attributes.append(
-        {"name": "Data Type", "value": model_molecular_metadata_row["data_type"]}
+        create_attribute("Data Type", model_molecular_metadata_row["data_type"])
     )
     attributes.append(
-        {
-            "name": "Platform Used",
-            "value": model_molecular_metadata_row["platform_name"],
-        }
+        create_attribute(
+            "Platform Used",
+            model_molecular_metadata_row["platform_name"],
+        )
     )
     external_links = model_molecular_metadata_row["external_db_links"]
 
@@ -427,19 +431,19 @@ def create_molecular_data_file(
 
     attributes.append({"name": "Sample ID", "value": sample_id})
     sample_type = get_sample_type_by_source(model_molecular_metadata_row["source"])
-    attributes.append({"name": "Sample Type", "value": sample_type})
+    attributes.append(create_attribute("Sample Type", sample_type))
     attributes.append(
-        {
-            "name": "Engrafted Tumour Passage",
-            "value": model_molecular_metadata_row["xenograft_passage"],
-        }
+        create_attribute(
+            "Engrafted Tumour Passage",
+            model_molecular_metadata_row["xenograft_passage"],
+        )
     )
-    attributes.append({"name": "Data Type", "value": data_type})
+    attributes.append(create_attribute("Data Type", data_type))
     attributes.append(
-        {
-            "name": "Platform Used",
-            "value": platform_name,
-        }
+        create_attribute(
+            "Platform Used",
+            platform_name,
+        )
     )
     file["attributes"] = attributes
 
@@ -460,8 +464,10 @@ def create_immune_markers_subsection(model):
         marker_value = row["marker_value"]
         if additional_data:
             marker_value = f"{marker_value} ({additional_data})"
-        attributes.append({"name": row["marker_name"], "value": marker_value})
+        attributes.append(create_attribute(row["marker_name"], marker_value))
     immune_markers_subsection["attributes"] = attributes
+
+    return immune_markers_subsection
 
 
 def create_model_treatment_subsection(model):
@@ -487,10 +493,10 @@ def create_model_treatment_subsection(model):
         links = processed_treatment_data_entries["links"]
         passage_range = model_treatment_metadata_row["passage_range"]
 
-        attributes.append({"name": "Drug", "value": treatment_names})
-        attributes.append({"name": "Dose", "value": doses})
-        attributes.append({"name": "Passage", "value": passage_range})
-        attributes.append({"name": "Response", "value": treatment_response})
+        attributes.append(create_attribute("Drug", treatment_names))
+        attributes.append(create_attribute("Dose", doses))
+        attributes.append(create_attribute("Passage", passage_range))
+        attributes.append(create_attribute("Response", treatment_response))
         chembl_attribute = create_url_attribute(links, "ChEMBL")
         pubchem_attribute = create_url_attribute(links, "PubChem")
 
@@ -525,11 +531,11 @@ def create_patient_treatment_subsection(model):
         doses = processed_treatment_data_entries["doses"]
         links = processed_treatment_data_entries["links"]
 
-        attributes.append({"name": "Treatment", "value": treatment_names})
+        attributes.append(create_attribute("Treatment", treatment_names))
 
-        attributes.append({"name": "Dose", "value": doses})
+        attributes.append(create_attribute("Dose", doses))
 
-        attributes.append({"name": "Response", "value": treatment_response})
+        attributes.append(create_attribute("Response", treatment_response))
         chembl_attribute = create_url_attribute(links, "ChEMBL")
         pubchem_attribute = create_url_attribute(links, "PubChem")
 
@@ -543,9 +549,43 @@ def create_patient_treatment_subsection(model):
     return rows
 
 
+def create_histology_images_section(model):
+    rows = []
+    data = model["model_images"]
+    for image in data:
+        row = {"type": "Histology images"}
+        attributes = []
+        url = image["url"]
+        file_name = url.rsplit("/", 1)[1]
+
+        attributes.append(
+            {
+                "name": "Url",
+                "value": file_name,
+                "valqual": [
+                    {
+                        "name": "URL",
+                        "value": url,
+                    }
+                ],
+            }
+        )
+        attributes.append(create_attribute("Description", image["description"]))
+        attributes.append(create_attribute("Sample type", image["sample_type"]))
+        attributes.append(create_attribute("Passage", image["passage"]))
+        attributes.append(create_attribute("Magnification", image["magnification"]))
+        attributes.append(create_attribute("Staining", image["staining"]))
+        row["attributes"] = attributes
+        rows.append(row)
+    return rows
+
+
 def create_publication_subsection(model):
     publications_ids = model["pdx_model_publications"]
+    if publications_ids is None:
+        return None
     publications_ids = publications_ids.replace(" ", "").split(",")
+
     publications = [get_publication_data(val) for val in publications_ids]
 
     rows = []
@@ -555,12 +595,12 @@ def create_publication_subsection(model):
         atributes = []
         pmid = publication["pmid"]
 
-        atributes.append({"name": "Title", "value": publication["title"]})
-        atributes.append({"name": "Authors", "value": publication["authorString"]})
-        atributes.append({"name": "Year", "value": publication["pubYear"]})
-        atributes.append({"name": "Volume", "value": publication["journalVolume"]})
-        atributes.append({"name": "Issue", "value": publication["issue"]})
-        atributes.append({"name": "Issn", "value": publication["journalIssn"]})
+        atributes.append(create_attribute("Title", publication["title"]))
+        atributes.append(create_attribute("Authors", publication["authorString"]))
+        atributes.append(create_attribute("Year", publication["pubYear"]))
+        atributes.append(create_attribute("Volume", publication["journalVolume"]))
+        atributes.append(create_attribute("Issue", publication["issue"]))
+        atributes.append(create_attribute("Issn", publication["journalIssn"]))
 
         atributes.append(
             {
@@ -616,8 +656,8 @@ def create_related_models_subsection(model):
         parent = parent[0]["external_model_id"]
         link = {"url": parent}
         attributes = [
-            {"name": "Type", "value": "BioStudies"},
-            {"name": "Role", "value": "child of"},
+            create_attribute("Type", "BioStudies"),
+            create_attribute("Role", "child of"),
         ]
         link["attributes"] = attributes
         links.append(link)
@@ -627,12 +667,13 @@ def create_related_models_subsection(model):
             child = child["external_model_id"]
             link = {"url": child}
             attributes = [
-                {"name": "Type", "value": "BioStudies"},
-                {"name": "Role", "value": "parent of"},
+                create_attribute("Type", "BioStudies"),
+                create_attribute("Role", "parent of"),
             ]
             link["attributes"] = attributes
             links.append(link)
-
+    if links == []:
+        return None
     related_models_subsection["links"] = links
     return related_models_subsection
 
@@ -641,8 +682,8 @@ def format_link(link):
     biostudies_link = {}
     attributes = []
     biostudies_link["url"] = link["url"]
-    attributes.append({"name": "Description", "value": link["label"]})
-    attributes.append({"name": "Type", "value": link["resource"].lower()})
+    attributes.append(create_attribute("Description", link["label"]))
+    attributes.append(create_attribute("Type", link["resource"].lower()))
     biostudies_link["attributes"] = attributes
     return biostudies_link
 
