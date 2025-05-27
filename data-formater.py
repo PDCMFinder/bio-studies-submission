@@ -126,7 +126,7 @@ def fetch_and_process_data(output):
             with open(json_file_name, "w") as f:
                 f.write(json.dumps(study, indent=2))
 
-            print(json.dumps(study))
+            # print(json.dumps(study))
 
         # Update metadata
         total_count += len(data)
@@ -146,7 +146,7 @@ def create_attribute(name, value):
 
 def format_model(model, model_folder_path):
     study = {}
-    study["accno"] = model["external_model_id"] + "_" + model["data_source"]
+    # study["accno"] = model["external_model_id"] + "_" + model["data_source"]
     study["type"] = "submission"
 
     attributes = []
@@ -189,9 +189,13 @@ def add_subsections(study_section, model, model_folder_path):
             subsections, create_pdx_model_engraftment_subsection(model)
         )
     add_section_if_not_null(subsections, create_model_quality_control_subsection(model))
-    add_section_if_not_null(
-        subsections, create_molecular_data_subsection(model, model_folder_path)
+    molecular_metadata, molecular_data_files = create_molecular_data_subsection(
+        model, model_folder_path
     )
+    print("molecular_metadata", molecular_metadata)
+    print("molecular_data_files", molecular_data_files)
+    add_section_if_not_null(subsections, molecular_metadata)
+    add_section_if_not_null(subsections, molecular_data_files)
     add_section_if_not_null(subsections, create_immune_markers_subsection(model))
     add_section_if_not_null(subsections, create_model_treatment_subsection(model))
     add_section_if_not_null(subsections, create_patient_treatment_subsection(model))
