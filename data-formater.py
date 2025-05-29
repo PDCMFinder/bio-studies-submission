@@ -28,6 +28,8 @@ COLUMNS_TO_READ = [
     "pdx_model_publications",
     "model_relationships",
     "model_images",
+    "license_name",
+    "license_url",
     "data_source",
 ]
 
@@ -105,7 +107,7 @@ def fetch_and_process_data(output):
     while True:
         quoted_value = urllib.parse.quote('in.("HBCx-118")', safe="(),")
         # TM00199
-        quoted_value = urllib.parse.quote('in.("HCM-CSHL-0729-C18")', safe="(),")
+        quoted_value = urllib.parse.quote('in.("SIDM00845")', safe="(),")
         params_str = urllib.parse.urlencode(PARAMS)
         filter_str = f"external_model_id={quoted_value}"
         final_url = f"{SEARCH_INDEX_ENDPOINT}?{params_str}&{filter_str}"
@@ -150,26 +152,32 @@ def format_model(model, model_folder_path):
     study["type"] = "submission"
 
     attributes = []
-    attributes.append(create_attribute("Title", model["histology"]))
+
+    title = f"[{model['data_source']}] [{model['model_type']}] {model['external_model_id']}-{model['histology']}"
+    attributes.append(create_attribute("Title", title))
     attributes.append(create_attribute("ReleaseDate", str(date.today())))
 
     study["attributes"] = attributes
 
-    section = create_study_section(model, model_folder_path)
+    section = create_study_section(model, model_folder_path, title)
     study["section"] = section
 
     return study
 
 
-def create_study_section(model, model_folder_path):
+def create_study_section(model, model_folder_path, title):
     study_section = {}
     study_section["accno"] = STUDY_SECTION_ID
     study_section["type"] = "Study"
 
     attributes = []
     attributes.append(create_attribute("Model ID", model["external_model_id"]))
-    attributes.append(create_attribute("Title", model["histology"]))
+    attributes.append(create_attribute("Title", title))
     attributes.append(create_attribute("Study type", model["model_type"]))
+    license = create_attribute("License", model["license_name"])
+    license["valqual"] = [{"name": "url", "value": model["license_url"]}]
+
+    attributes.append(license)
     study_section["attributes"] = attributes
     study_section = add_subsections(study_section, model, model_folder_path)
     return study_section
@@ -192,8 +200,7 @@ def add_subsections(study_section, model, model_folder_path):
     molecular_metadata, molecular_data_files = create_molecular_data_subsection(
         model, model_folder_path
     )
-    print("molecular_metadata", molecular_metadata)
-    print("molecular_data_files", molecular_data_files)
+
     add_section_if_not_null(subsections, molecular_metadata)
     add_section_if_not_null(subsections, molecular_data_files)
     add_section_if_not_null(subsections, create_immune_markers_subsection(model))
@@ -456,22 +463,79 @@ def create_molecular_data_file(
 
 def create_immune_markers_subsection(model):
     immune_markers_subsection = {"type": "Immune markers"}
-    attributes = []
+    subsections = []
     url = f"{BASE_URL}/immunemarker_data_extended?model_id=eq.{model['external_model_id']}"
 
     response = requests.get(url)
     response.raise_for_status()
     data = response.json()
 
-    for row in data:
-        additional_data = row["essential_or_additional_details"]
-        marker_value = row["marker_value"]
-        if additional_data:
-            marker_value = f"{marker_value} ({additional_data})"
-        attributes.append(create_attribute(row["marker_name"], marker_value))
-    immune_markers_subsection["attributes"] = attributes
+    if data and data != []:
+        model_genomics = [row for row in data if row["marker_type"] == "Model Genomics"]
 
+        formated_model_genomics_data = format_immune_markers_data(model_genomics)
+        model_genomics_section = []
+
+        for sample_id in formated_model_genomics_data:
+            model_genomics_section_row = {}
+            attributes = []
+            attributes.append(create_attribute("Sample ID", sample_id))
+            data_by_sample = formated_model_genomics_data[sample_id]
+            for marker_name in data_by_sample:
+                marker_value = data_by_sample[marker_name]
+                attributes.append(create_attribute(marker_name, marker_value))
+            model_genomics_section_row["attributes"] = attributes
+            model_genomics_section.append(model_genomics_section_row)
+        subsections.append(model_genomics_section)
+
+        hla = [row for row in data if row["marker_type"] == "HLA type"]
+        formated_hla_data = format_immune_markers_data(hla)
+        hla_section = []
+
+        for sample_id in formated_hla_data:
+            hla_section_row = {"type": "HLA"}
+            attributes = []
+            attributes.append(create_attribute("Sample ID", sample_id))
+            data_by_sample = formated_hla_data[sample_id]
+            for marker_name in data_by_sample:
+                marker_value = data_by_sample[marker_name]
+                attributes.append(create_attribute(marker_name, marker_value))
+            hla_section_row["attributes"] = attributes
+            hla_section.append(hla_section_row)
+        subsections.append(hla_section)
+
+    immune_markers_subsection["subsections"] = subsections
+    # print(json.dumps(immune_markers_subsection))
     return immune_markers_subsection
+
+
+def format_immune_markers_data(data):
+    per_sample_data = {}
+    for row in data:
+        sample_id = row["sample_id"]
+        if sample_id not in per_sample_data:
+            per_sample_data[sample_id] = {}
+        marker_name = row["marker_name"]
+
+        if marker_name not in per_sample_data[sample_id]:
+            per_sample_data[sample_id][marker_name] = ""
+
+        marker_value = row["marker_value"]
+        extra = row["essential_or_additional_details"]
+        value = marker_value
+        if extra:
+            value = value + " (" + extra + ")"
+
+        if per_sample_data[sample_id][marker_name] == "":
+            per_sample_data[sample_id][marker_name] = value
+        else:
+            per_sample_data[sample_id][marker_name] = (
+                per_sample_data[sample_id][marker_name] + os.linesep + value
+            )
+    # Sort the data so the data is sorted my marker name (on each sample_id)
+    for sample_id in per_sample_data:
+        per_sample_data[sample_id] = dict(sorted(per_sample_data[sample_id].items()))
+    return per_sample_data
 
 
 def create_model_treatment_subsection(model):
@@ -556,6 +620,8 @@ def create_patient_treatment_subsection(model):
 def create_histology_images_section(model):
     rows = []
     data = model["model_images"]
+    if not data:
+        return None
     for image in data:
         row = {"type": "Histology images"}
         attributes = []
@@ -790,16 +856,16 @@ def get_publication_data(pub_id):
     result = data["result"]
 
     return {
-        "title": result["title"],
-        "pubYear": result["pubYear"],
-        "authorString": result["authorString"],
-        "journalTitle": result["journalTitle"],
-        "journalVolume": result["journalVolume"],
-        "journalIssn": result["journalIssn"],
-        "issue": result["issue"],
-        "pubType": result["pubType"],
-        "pmid": result["pmid"],
-        "doi": result["doi"],
+        "title": result.get("title", "N/A"),
+        "pubYear": result.get("pubYear", "N/A"),
+        "authorString": result.get("authorString", "N/A"),
+        "journalTitle": result.get("journalTitle", "N/A"),
+        "journalVolume": result.get("journalVolume", "N/A"),
+        "journalIssn": result.get("journalIssn", "N/A"),
+        "issue": result.get("issue", "N/A"),
+        "pubType": result.get("pubType", "N/A"),
+        "pmid": result.get("pmid", "N/A"),
+        "doi": result.get("doi", "N/A"),
     }
 
 

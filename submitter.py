@@ -62,12 +62,12 @@ def submit(model_id, submission):
 
         if data["totalHits"] != 0:
             hits = data["hits"]
-            print("hits", hits)
+
             if hits != []:
                 accession = hits[0]["accession"]
                 print(f"Model {model_id} existed under accession {accession}")
                 submission["accno"] = accession
-                print("Updated submission", submission)
+                print("Updated submission", accession)
 
     response = api.create_submission(submission)
 
