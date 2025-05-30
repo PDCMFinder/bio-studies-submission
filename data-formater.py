@@ -35,6 +35,7 @@ COLUMNS_TO_READ = [
 
 BASE_URL = "https://dev.cancermodels.org/api/"
 SEARCH_INDEX_ENDPOINT = BASE_URL + "search_index"
+CELL_MODEL_ENDPOINT = BASE_URL + "cell_model"
 MODEL_MOLECULAR_METADATA_ENDPOINT = BASE_URL + "model_molecular_metadata"
 DOSING_STUDIES_ENDPOINT = BASE_URL + "dosing_studies"
 PATIENT_TREATMENT_ENDPOINT = BASE_URL + "patient_treatment"
@@ -196,6 +197,8 @@ def add_subsections(study_section, model, model_folder_path):
         add_section_if_not_null(
             subsections, create_pdx_model_engraftment_subsection(model)
         )
+    if model["model_type"] != "PDX":
+        add_section_if_not_null(subsections, create_model_derivation_subsection(model))
     add_section_if_not_null(subsections, create_model_quality_control_subsection(model))
     molecular_metadata, molecular_data_files = create_molecular_data_subsection(
         model, model_folder_path
@@ -269,6 +272,31 @@ def create_pdx_model_engraftment_subsection(model):
         rows.append(subsection_row)
 
     return rows
+
+
+def create_model_derivation_subsection(model):
+    model_derivation_subsection = {"type": "Model derivation"}
+    attributes = []
+
+    url = f"{CELL_MODEL_ENDPOINT}?model_id=eq.{model['pdcm_model_id']}"
+    response = requests.get(url)
+    response.raise_for_status()
+    data = response.json()
+
+    for row in data:
+        attributes.append(
+            create_attribute("Growth properties", row["growth_properties"])
+        )
+        attributes.append(create_attribute("Growth media", row["growth_media"]))
+        attributes.append(create_attribute("Plate coating", row["plate_coating"]))
+        attributes.append(create_attribute("Passage", row["passage_number"]))
+        attributes.append(create_attribute("Supplements", row["supplements"]))
+        attributes.append(create_attribute("Contaminated", row["contaminated"]))
+        attributes.append(
+            create_attribute("Contamination details", row["contamination_details"])
+        )
+    model_derivation_subsection["attributes"] = attributes
+    return [model_derivation_subsection]
 
 
 def create_model_quality_control_subsection(model):
@@ -672,19 +700,6 @@ def create_publication_subsection(model):
         atributes.append(create_attribute("Issue", publication["issue"]))
         atributes.append(create_attribute("Issn", publication["journalIssn"]))
 
-        atributes.append(
-            {
-                "name": "EuropePMC",
-                "value": "EuropePMC",
-                "valqual": [
-                    {
-                        "name": "url",
-                        "value": f"https://europepmc.org/article/MED/{pmid}",
-                    }
-                ],
-            }
-        )
-
         doi = publication["doi"]
         atributes.append(
             {
@@ -694,6 +709,19 @@ def create_publication_subsection(model):
                     {
                         "name": "url",
                         "value": f"https://dx.doi.org/{doi}",
+                    }
+                ],
+            }
+        )
+
+        atributes.append(
+            {
+                "name": "EuropePMC",
+                "value": "EuropePMC",
+                "valqual": [
+                    {
+                        "name": "url",
+                        "value": f"https://europepmc.org/article/MED/{pmid}",
                     }
                 ],
             }
