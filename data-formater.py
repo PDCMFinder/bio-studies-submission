@@ -36,6 +36,7 @@ COLUMNS_TO_READ = [
 BASE_URL = "https://dev.cancermodels.org/api/"
 SEARCH_INDEX_ENDPOINT = BASE_URL + "search_index"
 CELL_MODEL_ENDPOINT = BASE_URL + "cell_model"
+QUALITY_ASSURANCE = BASE_URL + "quality_assurance"
 MODEL_MOLECULAR_METADATA_ENDPOINT = BASE_URL + "model_molecular_metadata"
 DOSING_STUDIES_ENDPOINT = BASE_URL + "dosing_studies"
 PATIENT_TREATMENT_ENDPOINT = BASE_URL + "patient_treatment"
@@ -175,6 +176,7 @@ def create_study_section(model, model_folder_path, title):
     attributes.append(create_attribute("Model ID", model["external_model_id"]))
     attributes.append(create_attribute("Title", title))
     attributes.append(create_attribute("Study type", model["model_type"]))
+    attributes.append(create_attribute("Histology", model["histology"]))
     license = create_attribute("License", model["license_name"])
     license["valqual"] = [{"name": "url", "value": model["license_url"]}]
 
@@ -300,10 +302,15 @@ def create_model_derivation_subsection(model):
 
 
 def create_model_quality_control_subsection(model):
+    url = f"{QUALITY_ASSURANCE}?model_id=eq.{model['pdcm_model_id']}"
+
+    response = requests.get(url)
+    response.raise_for_status()
+    data = response.json()
+
     rows = []
 
-    quality_assurance = model["quality_assurance"]
-    for row in quality_assurance:
+    for row in data:
         subsection_row = {}
         attributes = []
 
@@ -320,6 +327,8 @@ def create_model_quality_control_subsection(model):
 
         subsection_row["attributes"] = attributes
         rows.append(subsection_row)
+
+    print("QA", rows)
 
     return rows
 
