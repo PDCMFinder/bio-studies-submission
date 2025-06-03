@@ -38,6 +38,7 @@ SEARCH_INDEX_ENDPOINT = BASE_URL + "search_index"
 CELL_MODEL_ENDPOINT = BASE_URL + "cell_model"
 QUALITY_ASSURANCE = BASE_URL + "quality_assurance"
 MODEL_MOLECULAR_METADATA_ENDPOINT = BASE_URL + "model_molecular_metadata"
+MODEL_INFORMATION_ENDPOINT = BASE_URL + "model_information"
 DOSING_STUDIES_ENDPOINT = BASE_URL + "dosing_studies"
 PATIENT_TREATMENT_ENDPOINT = BASE_URL + "patient_treatment"
 RELEASE_ENDPOINT = BASE_URL + "release_info"
@@ -109,7 +110,7 @@ def fetch_and_process_data(output):
     while True:
         quoted_value = urllib.parse.quote('in.("HBCx-118")', safe="(),")
         # TM00199
-        quoted_value = urllib.parse.quote('in.("SIDM00845")', safe="(),")
+        quoted_value = urllib.parse.quote('in.("AB559")', safe="(),")
         params_str = urllib.parse.urlencode(PARAMS)
         filter_str = f"external_model_id={quoted_value}"
         final_url = f"{SEARCH_INDEX_ENDPOINT}?{params_str}&{filter_str}"
@@ -155,7 +156,7 @@ def format_model(model, model_folder_path):
 
     attributes = []
 
-    title = f"[{model['data_source']}] [{model['model_type']}] {model['external_model_id']}-{model['histology']}"
+    title = f"[{model['data_source']}] [{model['model_type']}] [{model['external_model_id']}] {model['histology']}"
     attributes.append(create_attribute("Title", title))
     attributes.append(create_attribute("ReleaseDate", str(date.today())))
 
@@ -180,10 +181,38 @@ def create_study_section(model, model_folder_path, title):
     license = create_attribute("License", model["license_name"])
     license["valqual"] = [{"name": "url", "value": model["license_url"]}]
 
+    extra_information = fetch_extra_information(model)
+    if extra_information:
+        model["other_model_links"] = extra_information.get("other_model_links")
+
+    supplierLink = get_supplier(model["other_model_links"])
+    if supplierLink:
+        label = f"{supplierLink['link_label']} ({supplierLink['resource_label']})"
+        supplier = create_attribute("Supplier", label)
+        supplier["valqual"] = [{"name": "url", "value": supplierLink["link"]}]
+
+        attributes.append(supplier)
+
     attributes.append(license)
     study_section["attributes"] = attributes
     study_section = add_subsections(study_section, model, model_folder_path)
     return study_section
+
+
+def get_supplier(other_model_links):
+    supplier = None
+    if other_model_links:
+        supplier = [x for x in other_model_links if x["type"] == "supplier"]
+        if supplier != []:
+            supplier = supplier[0]
+    return supplier
+
+
+def get_external_ids(other_model_links):
+    external_ids = []
+    if other_model_links:
+        external_ids = [x for x in other_model_links if x["type"] == "external_id"]
+    return external_ids
 
 
 def add_section_if_not_null(current_subsections, new_subsection):
@@ -194,6 +223,8 @@ def add_section_if_not_null(current_subsections, new_subsection):
 def add_subsections(study_section, model, model_folder_path):
     subsections = []
     add_section_if_not_null(subsections, create_organization_section(model))
+    if model["model_type"] != "PDX":
+        add_section_if_not_null(subsections, create_identifiers_subsection(model))
     add_section_if_not_null(subsections, create_patient_tumor_subsection(model))
     if model["model_type"] == "PDX":
         add_section_if_not_null(
@@ -225,6 +256,24 @@ def create_organization_section(model):
         create_attribute("Name", model["provider_name"])
     ]
     return organization_section
+
+
+def create_identifiers_subsection(model):
+    identifiers_section = []
+    external_ids = get_external_ids(model["other_model_links"])
+    if external_ids != []:
+        for external_id in external_ids:
+            row = {"type": "Identifiers"}
+            attributes = []
+            attributes.append(
+                create_attribute("Resource", external_id["resource_label"])
+            )
+            link = create_attribute("Link", external_id["link_label"])
+            link["valqual"] = [{"name": "url", "value": external_id["link"]}]
+            attributes.append(link)
+            row["attributes"] = attributes
+            identifiers_section.append(row)
+    return identifiers_section
 
 
 def create_patient_tumor_subsection(model):
@@ -315,22 +364,48 @@ def create_model_quality_control_subsection(model):
         attributes = []
 
         subsection_row["type"] = "Model quality control"
-        attributes.append(create_attribute("Technique", row["validation_technique"]))
-        attributes.append(
-            create_attribute(
-                "Description",
-                row["description"],
-            )
-        )
 
-        attributes.append(create_attribute("Passage", row["passages_tested"]))
+        if model["model_type"] == "PDX":
+            attributes.append(
+                create_attribute("Technique", row["validation_technique"])
+            )
+            attributes.append(
+                create_attribute(
+                    "Description",
+                    row["description"],
+                )
+            )
+            attributes.append(create_attribute("Passage", row["passages_tested"]))
+        else:
+            attributes.append(
+                create_attribute("Technique", row["validation_technique"])
+            )
+            attributes.append(create_attribute("Passage", row["passages_tested"]))
+            attributes.append(
+                create_attribute(
+                    "Morphological features", row["morphological_features"]
+                )
+            )
+            attributes.append(create_attribute("STR analysis", row["str_analysis"]))
+            attributes.append(create_attribute("Model purity", row["model_purity"]))
 
         subsection_row["attributes"] = attributes
         rows.append(subsection_row)
 
-    print("QA", rows)
-
     return rows
+
+
+def fetch_extra_information(model):
+    url = f"{MODEL_INFORMATION_ENDPOINT}?id=eq.{model['pdcm_model_id']}"
+    url = url + "&select=other_model_links"
+    response = requests.get(url)
+    response.raise_for_status()
+    data = response.json()
+
+    if data and data != []:
+        return data[0]
+    else:
+        return None
 
 
 def fetch_molecular_metadata_per_model(external_model_id):
@@ -539,10 +614,13 @@ def create_immune_markers_subsection(model):
                 attributes.append(create_attribute(marker_name, marker_value))
             hla_section_row["attributes"] = attributes
             hla_section.append(hla_section_row)
-        subsections.append(hla_section)
+        if hla_section != []:
+            subsections.append(hla_section)
+
+    else:
+        return None
 
     immune_markers_subsection["subsections"] = subsections
-    # print(json.dumps(immune_markers_subsection))
     return immune_markers_subsection
 
 
