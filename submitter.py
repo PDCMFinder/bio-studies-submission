@@ -36,17 +36,19 @@ def process_model(data_folder, provider, model):
     files_folder_name = "molecular_data"
     files_directory = os.path.join(model_path, files_folder_name)
 
-    files = [
-        os.path.join(provider, model, files_folder_name, f)
-        for f in os.listdir(files_directory)
-        if os.path.isfile(os.path.join(files_directory, f)) and f.__contains__(".tsv")
-    ]
-    for file in files:
-        print("\t", file)
-        print("Uploading to biostudies...")
-        local_path = os.path.join(data_folder, file)
-        # Uploads file to BioStudies
-        api.upload_file(local_path, file)
+    if os.path.exists(files_directory):
+        files = [
+            os.path.join(provider, model, files_folder_name, f)
+            for f in os.listdir(files_directory)
+            if os.path.isfile(os.path.join(files_directory, f))
+            and f.__contains__(".tsv")
+        ]
+        for file in files:
+            print("\t", file)
+            print("Uploading to biostudies...")
+            local_path = os.path.join(data_folder, file)
+            # Uploads file to BioStudies
+            api.upload_file(local_path, file)
 
     submit(model, submission)
 
