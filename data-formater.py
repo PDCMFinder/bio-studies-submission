@@ -110,7 +110,7 @@ def fetch_and_process_data(output):
     while True:
         quoted_value = urllib.parse.quote('in.("HBCx-118")', safe="(),")
         # TM00199
-        quoted_value = urllib.parse.quote('in.("AB559")', safe="(),")
+        quoted_value = urllib.parse.quote('in.("REV047")', safe="(),")
         params_str = urllib.parse.urlencode(PARAMS)
         filter_str = f"external_model_id={quoted_value}"
         final_url = f"{SEARCH_INDEX_ENDPOINT}?{params_str}&{filter_str}"
@@ -253,7 +253,7 @@ def add_subsections(study_section, model, model_folder_path):
 def create_organization_section(model):
     organization_section = {"accno": "o1", "type": "Organization"}
     organization_section["attributes"] = [
-        create_attribute("Name", model["provider_name"])
+        create_attribute("Name", f"{model['provider_name']} ({model['data_source']})")
     ]
     return organization_section
 
