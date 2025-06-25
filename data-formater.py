@@ -110,14 +110,17 @@ def fetch_and_process_data(output):
     while True:
         quoted_value = urllib.parse.quote('in.("HBCx-118")', safe="(),")
         # TM00199
-        quoted_value = urllib.parse.quote('in.("REV047")', safe="(),")
+        quoted_value = urllib.parse.quote('in.("K68440-261-T")', safe="(),")
         params_str = urllib.parse.urlencode(PARAMS)
         filter_str = f"external_model_id={quoted_value}"
         final_url = f"{SEARCH_INDEX_ENDPOINT}?{params_str}&{filter_str}"
+        # final_url = f"{SEARCH_INDEX_ENDPOINT}?{params_str}"
 
         response = requests.get(final_url)
         response.raise_for_status()
         data = response.json()
+
+        counter = 0
 
         # Process each model in the current batch
         for model in data:
@@ -131,10 +134,13 @@ def fetch_and_process_data(output):
             with open(json_file_name, "w") as f:
                 f.write(json.dumps(study, indent=2))
 
-            # print(json.dumps(study))
+            counter = counter + 1
+            if counter % 100 == 0:
+                print("Processed:", counter)
 
         # Update metadata
         total_count += len(data)
+        print("total_count", total_count)
 
         # Check if there are more results to fetch
         if len(data) < PARAMS["limit"]:
@@ -155,15 +161,20 @@ def format_model(model, model_folder_path):
     study["type"] = "submission"
 
     attributes = []
+    print("init -", model["external_model_id"])
 
     title = f"[{model['data_source']}] [{model['model_type']}] [{model['external_model_id']}] {model['histology']}"
     attributes.append(create_attribute("Title", title))
-    attributes.append(create_attribute("ReleaseDate", str(date.today())))
+    # release_date = date.today()
+    release_date = "2024-12-01"
+    attributes.append(create_attribute("ReleaseDate", release_date))
+    attributes.append(create_attribute("AttachTo", "CancerModels.Org"))
 
     study["attributes"] = attributes
 
     section = create_study_section(model, model_folder_path, title)
     study["section"] = section
+    print("end -", model["external_model_id"])
 
     return study
 
@@ -670,7 +681,6 @@ def create_model_treatment_subsection(model):
         processed_treatment_data_entries = process_treatment_data_entries(
             model_treatment_metadata_row["entries"]
         )
-        ...
         treatment_names = processed_treatment_data_entries["names"]
         doses = processed_treatment_data_entries["doses"]
         links = processed_treatment_data_entries["links"]
@@ -924,7 +934,8 @@ def process_treatment_data_entries(entries: list):
 
     for entry in entries:
         names.append(entry["name"])
-        doses.append(entry["dose"])
+        if entry["dose"]:
+            doses.append(entry["dose"])
         if entry["external_db_links"]:
             for external_db_link in entry["external_db_links"]:
                 link = {
@@ -933,6 +944,7 @@ def process_treatment_data_entries(entries: list):
                     "resource": external_db_link["resource_label"],
                 }
                 links.append(link)
+
     return {"names": " + ".join(names), "doses": " + ".join(set(doses)), "links": links}
 
 

@@ -9,6 +9,7 @@ from biostudiesclient.auth import Auth
 auth = Auth()
 auth.login()
 api = Api(auth)
+print("Authenticated")
 
 BASE_URL = "https://wwwdev.ebi.ac.uk/"
 SEARCH_URL = BASE_URL + "biostudies/api/v1/search?query={model_id}"
@@ -53,23 +54,32 @@ def process_model(data_folder, provider, model):
     submit(model, submission)
 
 
+def get_biostudies_base_url_from_env():
+    biostudies_api_url_dev = "https://wwwdev.ebi.ac.uk/biostudies/submissions/api"
+    return os.environ.get("BIOSTUDIES_API_URL", biostudies_api_url_dev)
+
+
+def get_password_from_env():
+    biostudies_password_dev = "CHANGE_ME"
+    return os.environ.get("BIOSTUDIES_TOKEN", biostudies_password_dev)
+
+
 def submit(model_id, submission):
     # Does it already exist?
-    print(SEARCH_URL.format(model_id=model_id))
     if CHECK_IF_EXISTS:
-        response = requests.get(SEARCH_URL.format(model_id=model_id))
+        header = {"X-SESSION-TOKEN": get_password_from_env()}
+        url = f"{get_biostudies_base_url_from_env()}/submissions?keywords={model_id}"
+
+        response = requests.get(url, headers=header)
         response.raise_for_status()
         data = response.json()
         # print(data)
 
-        if data["totalHits"] != 0:
-            hits = data["hits"]
-
-            if hits != []:
-                accession = hits[0]["accession"]
-                print(f"Model {model_id} existed under accession {accession}")
-                submission["accno"] = accession
-                print("Updated submission", accession)
+        if data and data != []:
+            accession = data[0]["accno"]
+            print(f"Model {model_id} existed under accession {accession}")
+            submission["accno"] = accession
+            print("Updated submission", accession)
 
     response = api.create_submission(submission)
 
