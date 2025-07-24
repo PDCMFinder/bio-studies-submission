@@ -113,11 +113,12 @@ def fetch_and_process_data(output):
     skipped = 0
     while True:
         # quoted_value = urllib.parse.quote('in.("HBCx-118")', safe="(),")
-        quoted_value = urllib.parse.quote('in.("SIDM01064")', safe="(),")
+        quoted_value = urllib.parse.quote('in.("WUSTL WHIM5")', safe="(),")
         params_str = urllib.parse.urlencode(PARAMS)
-        # filter_str = f"external_model_id={quoted_value}"
-        # final_url = f"{SEARCH_INDEX_ENDPOINT}?{params_str}&{filter_str}"
-        final_url = f"{SEARCH_INDEX_ENDPOINT}?{params_str}"
+        filter_str = f"external_model_id={quoted_value}"
+        final_url = f"{SEARCH_INDEX_ENDPOINT}?{params_str}&{filter_str}"
+
+        # final_url = f"{SEARCH_INDEX_ENDPOINT}?{params_str}"
 
         response = requests.get(final_url)
         response.raise_for_status()
@@ -126,7 +127,9 @@ def fetch_and_process_data(output):
         # Process each model in the current batch
         for model in data:
             data_source = model["data_source"]
-            model_folder_path = f"{output}/{data_source}/{model['external_model_id']}"
+            cleaned_model_id = model["external_model_id"].replace(" ", "-")
+            model["external_model_id"] = cleaned_model_id
+            model_folder_path = f"{output}/{data_source}/{cleaned_model_id}"
             if SKIP_PROCESSED:
                 if os.path.exists(model_folder_path):
                     print("Skip", model_folder_path)
@@ -135,7 +138,7 @@ def fetch_and_process_data(output):
             create_folder_if_not_exists(model_folder_path)
             study = format_model(model, model_folder_path)
 
-            json_file_name = f"{model_folder_path}/{model['external_model_id']}.json"
+            json_file_name = f"{model_folder_path}/{cleaned_model_id}.json"
 
             with open(json_file_name, "w") as f:
                 f.write(json.dumps(study, indent=2))
@@ -200,8 +203,18 @@ def create_study_section(model, model_folder_path, title):
     license["valqual"] = [{"name": "url", "value": model["license_url"]}]
 
     extra_information = fetch_extra_information(model)
+
     if extra_information:
         model["other_model_links"] = extra_information.get("other_model_links")
+        if extra_information.get("contact_form"):
+            model["form_url"] = extra_information.get("contact_form").get("form_url")
+        if extra_information.get("source_database"):
+            model["database_url"] = extra_information.get("source_database").get(
+                "database_url"
+            )
+
+    attributes.append(create_attribute("Form url", model.get("form_url", "")))
+    attributes.append(create_attribute("Database url", model.get("database_url", "")))
 
     supplierLink = get_supplier(model["other_model_links"])
     if supplierLink:
@@ -414,8 +427,7 @@ def create_model_quality_control_subsection(model):
 
 
 def fetch_extra_information(model):
-    url = f"{MODEL_INFORMATION_ENDPOINT}?id=eq.{model['pdcm_model_id']}"
-    url = url + "&select=other_model_links"
+    url = f"{MODEL_INFORMATION_ENDPOINT}?id=eq.{model['pdcm_model_id']}&select=other_model_links,contact_form(form_url),source_database(database_url)"
     response = requests.get(url)
     response.raise_for_status()
     data = response.json()
@@ -810,6 +822,7 @@ def create_publication_subsection(model):
         atributes.append(create_attribute("Authors", publication["authorString"]))
         atributes.append(create_attribute("Year", publication["pubYear"]))
         atributes.append(create_attribute("Volume", publication["journalVolume"]))
+        atributes.append(create_attribute("JournalTitle", publication["journalTitle"]))
         atributes.append(create_attribute("Issue", publication["issue"]))
         atributes.append(create_attribute("Issn", publication["journalIssn"]))
 
