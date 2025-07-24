@@ -6,6 +6,8 @@ import json
 import argparse
 import re
 
+SKIP_PROCESSED = True
+
 # Define the endpoint and query parameters
 COLUMNS_TO_READ = [
     "pdcm_model_id",
@@ -107,25 +109,29 @@ def create_folder_if_not_exists(output_folder):
 def fetch_and_process_data(output):
     processed_data = []
     total_count = 0
+    counter = 0
+    skipped = 0
     while True:
-        quoted_value = urllib.parse.quote('in.("HBCx-118")', safe="(),")
-        # TM00199
-        quoted_value = urllib.parse.quote('in.("K68440-261-T")', safe="(),")
+        # quoted_value = urllib.parse.quote('in.("HBCx-118")', safe="(),")
+        quoted_value = urllib.parse.quote('in.("SIDM01064")', safe="(),")
         params_str = urllib.parse.urlencode(PARAMS)
-        filter_str = f"external_model_id={quoted_value}"
-        final_url = f"{SEARCH_INDEX_ENDPOINT}?{params_str}&{filter_str}"
-        # final_url = f"{SEARCH_INDEX_ENDPOINT}?{params_str}"
+        # filter_str = f"external_model_id={quoted_value}"
+        # final_url = f"{SEARCH_INDEX_ENDPOINT}?{params_str}&{filter_str}"
+        final_url = f"{SEARCH_INDEX_ENDPOINT}?{params_str}"
 
         response = requests.get(final_url)
         response.raise_for_status()
         data = response.json()
 
-        counter = 0
-
         # Process each model in the current batch
         for model in data:
             data_source = model["data_source"]
             model_folder_path = f"{output}/{data_source}/{model['external_model_id']}"
+            if SKIP_PROCESSED:
+                if os.path.exists(model_folder_path):
+                    print("Skip", model_folder_path)
+                    skipped += 1
+                    continue
             create_folder_if_not_exists(model_folder_path)
             study = format_model(model, model_folder_path)
 
@@ -140,7 +146,8 @@ def fetch_and_process_data(output):
 
         # Update metadata
         total_count += len(data)
-        print("total_count", total_count)
+        print("Counter", counter)
+        print("Skipped", skipped)
 
         # Check if there are more results to fetch
         if len(data) < PARAMS["limit"]:
@@ -168,7 +175,7 @@ def format_model(model, model_folder_path):
     # release_date = date.today()
     release_date = "2024-12-01"
     attributes.append(create_attribute("ReleaseDate", release_date))
-    attributes.append(create_attribute("AttachTo", "CancerModels.Org"))
+    attributes.append(create_attribute("AttachTo", "CancerModelsOrg"))
 
     study["attributes"] = attributes
 
@@ -227,7 +234,7 @@ def get_external_ids(other_model_links):
 
 
 def add_section_if_not_null(current_subsections, new_subsection):
-    if new_subsection is not None and new_subsection != []:
+    if new_subsection is not None and new_subsection != [] and new_subsection != {}:
         current_subsections.append(new_subsection)
 
 
@@ -447,16 +454,22 @@ def create_molecular_data_subsection(model, model_folder_path):
         row = create_molecular_metadata_row(model_molecular_metadata_row)
         molecular_metadata_sections.append(row)
 
-        molecular_data_file = create_molecular_data_file(
-            model_molecular_metadata_row, model_folder_path
-        )
+        if (
+            model_molecular_metadata_row["data_exists"] == "TRUE"
+            and model_molecular_metadata_row["data_restricted"] == "FALSE"
+        ):
+            molecular_data_file = create_molecular_data_file(
+                model_molecular_metadata_row, model_folder_path
+            )
 
-        if molecular_data_file:
-            files.append(molecular_data_file)
+            if molecular_data_file:
+                files.append(molecular_data_file)
 
     # Add a section at the end with the files
     files_section = {}
-    files_section["files"] = files
+
+    if files != []:
+        files_section["files"] = files
 
     return molecular_metadata_sections, files_section
 
@@ -609,7 +622,8 @@ def create_immune_markers_subsection(model):
                 attributes.append(create_attribute(marker_name, marker_value))
             model_genomics_section_row["attributes"] = attributes
             model_genomics_section.append(model_genomics_section_row)
-        subsections.append(model_genomics_section)
+        add_section_if_not_null(subsections, model_genomics_section)
+        # subsections.append(model_genomics_section)
 
         hla = [row for row in data if row["marker_type"] == "HLA type"]
         formated_hla_data = format_immune_markers_data(hla)
@@ -786,6 +800,8 @@ def create_publication_subsection(model):
     rows = []
 
     for publication in publications:
+        if not publication:
+            continue
         row = {"type": "Publications"}
         atributes = []
         pmid = publication["pmid"]
@@ -905,7 +921,30 @@ def fetch_molecular_data(
 ):
     table_name = MOLECULAR_DATA_TABLES[data_type]
 
-    url = f"{BASE_URL}/{table_name}?molecular_characterization_id=eq.{molecular_characterization_id}"
+    all_data = []
+    c = 0
+    mol_data_params = {
+        "limit": 1000,  # Set a limit for pagination
+        "offset": 0,
+    }
+    while True:
+        c = c + 1
+        # print("iteration", c)
+        params_str: str = urllib.parse.urlencode(mol_data_params)
+        # print("params_str", params_str)
+
+        url = f"{BASE_URL}{table_name}?molecular_characterization_id=eq.{molecular_characterization_id}&{params_str}"
+        # print("url", url)
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        all_data += data
+
+        # Check if there are more results to fetch
+        if len(data) < mol_data_params["limit"]:
+            break
+        else:
+            mol_data_params["offset"] += mol_data_params["limit"]
 
     file_name = clean_file_name(
         sample_id + "_" + data_type + "_" + platform_name + ".tsv"
@@ -913,15 +952,11 @@ def fetch_molecular_data(
 
     file_path = model_folder_path + "/" + file_name
 
-    response = requests.get(url)
-    response.raise_for_status()
-    data = response.json()
-
-    if data == []:
+    if all_data == []:
         return file_path, 0
 
     fields = MOLECULAR_DATA_FIELDS[data_type]
-    write_molecular_data_file(data, file_path, fields)
+    write_molecular_data_file(all_data, file_path, fields)
 
     file_size = os.path.getsize(file_path)
     return file_path, file_size

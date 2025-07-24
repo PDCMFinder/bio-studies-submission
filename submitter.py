@@ -1,24 +1,30 @@
 import argparse
 import json
 import os
+import shutil
 import requests
 
 from biostudiesclient.api import Api
 from biostudiesclient.auth import Auth
+import urllib
 
 auth = Auth()
 auth.login()
 api = Api(auth)
-print("Authenticated")
 
 BASE_URL = "https://wwwdev.ebi.ac.uk/"
 SEARCH_URL = BASE_URL + "biostudies/api/v1/search?query={model_id}"
 
 CHECK_IF_EXISTS = True
 
+SKIP_IF_EXISTS = True
+
+skipped = 0
+
 
 def process_model(data_folder, provider, model):
     print(f"process_model - {data_folder}, {provider}, {model}")
+
     model_path = os.path.join(data_folder, provider, model)
 
     model_submission_file = os.path.join(model_path, f"{model}.json")
@@ -45,13 +51,24 @@ def process_model(data_folder, provider, model):
             and f.__contains__(".tsv")
         ]
         for file in files:
-            print("\t", file)
-            print("Uploading to biostudies...")
+            print("\tUploading", file)
+            if " " in file:
+                print("There are spaces")
+                current_path = os.path.join(data_folder, provider, model)
+                new_path = os.path.join("to_fix", provider, model)
+                shutil.move(current_path, new_path)
+                print("Moved to to_fix location")
+                return False
+
             local_path = os.path.join(data_folder, file)
             # Uploads file to BioStudies
+            print("local_path", local_path)
+            print("file", file)
             api.upload_file(local_path, file)
+        print("Files updated")
 
     submit(model, submission)
+    return True
 
 
 def get_biostudies_base_url_from_env():
@@ -64,22 +81,34 @@ def get_password_from_env():
     return os.environ.get("BIOSTUDIES_TOKEN", biostudies_password_dev)
 
 
+def exists_already(model_id):
+    header = {"X-SESSION-TOKEN": get_password_from_env()}
+    model_id_encoded = model_id.replace(" ", "+")
+    url = (
+        f"{get_biostudies_base_url_from_env()}/submissions?keywords={model_id_encoded}"
+    )
+
+    response = requests.get(url, headers=header)
+    response.raise_for_status()
+    data = response.json()
+
+    accession = None
+
+    if data and data != []:
+        # Check they actually match by looking if the title contains the model id
+        if f"[{model_id}]" in data[0]["title"]:
+            accession = data[0]["accno"]
+            print(f"Model {model_id} existed under accession {accession}")
+
+    return accession
+
+
 def submit(model_id, submission):
     # Does it already exist?
     if CHECK_IF_EXISTS:
-        header = {"X-SESSION-TOKEN": get_password_from_env()}
-        url = f"{get_biostudies_base_url_from_env()}/submissions?keywords={model_id}"
-
-        response = requests.get(url, headers=header)
-        response.raise_for_status()
-        data = response.json()
-        # print(data)
-
-        if data and data != []:
-            accession = data[0]["accno"]
-            print(f"Model {model_id} existed under accession {accession}")
+        accession = exists_already(model_id)
+        if accession:
             submission["accno"] = accession
-            print("Updated submission", accession)
 
     response = api.create_submission(submission)
 
@@ -89,6 +118,8 @@ def submit(model_id, submission):
 
 
 def main(data_folder):
+    processed = 0
+    skipped = 0
     if not os.path.exists(data_folder):
         print(f"Directory `{data_folder}` does not exist")
         return
@@ -106,8 +137,29 @@ def main(data_folder):
             if os.path.isdir(os.path.join(provider_path, m))
         ]
         for model in models:
-            # print("Processing model", model, "(", provider, ")")
-            process_model(data_folder, provider, model)
+            if SKIP_IF_EXISTS:
+                accession = exists_already(model)
+                if accession:
+                    skipped += 1
+                    print("skipped", skipped)
+                    current_path = os.path.join(provider_path, model)
+                    new_path = os.path.join("done", provider, model)
+                    print("move (dup) from", current_path, "to", new_path)
+                    shutil.move(current_path, new_path)
+                    continue
+            ok = process_model(data_folder, provider, model)
+            if ok:
+                processed += 1
+                if processed % 100 == 0:
+                    print("Processed:", processed)
+                # Move to done
+                current_path = os.path.join(provider_path, model)
+                new_path = os.path.join("done", provider, model)
+                print("move (sub) from", current_path, "to", new_path)
+                shutil.move(current_path, new_path)
+    print("Ended")
+    print("skipped", skipped)
+    print("Processed:", processed)
 
 
 if __name__ == "__main__":
