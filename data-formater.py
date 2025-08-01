@@ -15,6 +15,7 @@ COLUMNS_TO_READ = [
     "provider_name",
     "model_type",
     "histology",
+    "paediatric",
     "cancer_system",
     "cancer_grade",
     "cancer_stage",
@@ -28,10 +29,15 @@ COLUMNS_TO_READ = [
     "quality_assurance",
     "email_list",
     "pdx_model_publications",
+    "breast_cancer_biomarkers",
     "model_relationships",
+    "has_relations",
     "model_images",
+    "dataset_available",
+    "model_availability_boolean",
     "license_name",
     "license_url",
+    "project_name",
     "data_source",
 ]
 
@@ -99,6 +105,65 @@ MOLECULAR_DATA_FIELDS = {
     ],
 }
 
+ethnicity_groups = {
+    "Asian": [
+        "Eastasian",
+        "East Asian",
+        "South Asian",
+        "Southasianorhispanic",
+        "Asian",
+    ],
+    "Black Or African American": [
+        "African",
+        "African American",
+        "Black",
+        "Black Or African American",
+        "Black Or African American; Not Hispanic Or Latino",
+    ],
+    "White": [
+        "White; Not Hispanic Or Latino",
+        "European",
+        "Caucasian",
+        "White",
+    ],
+    "Hispanic Or Latino": [
+        "Latino",
+        "White; Hispanic Or Latino",
+        "Hispanic",
+        "Hispanic Or Latino",
+    ],
+    "Not Provided": [
+        "Not Specified",
+        "Unknown",
+        "Not Provided",
+        "Not Collected",
+        "Mixed_or_unknown",
+        "Declined To Answer",
+    ],
+    "Other": [
+        "Other",
+        "Arabic",
+        "Native Hawaiian Or Other Pacific Islander",
+        "Not Hispanic Or Latino",
+    ],
+}
+
+
+# Normalize helper
+def norm(s):
+    return s.replace(" ", "").replace("_", "").replace(";", "").lower()
+
+
+# Build inverted map upfront
+ethnicity_groups_lookup = {}
+for group, ethnicities in ethnicity_groups.items():
+    for ethnicity in ethnicities:
+        ethnicity_groups_lookup[norm(ethnicity)] = group
+
+
+def get_ethnicity_group(ethnicity):
+    return ethnicity_groups_lookup.get(norm(ethnicity), None)
+
 
 def create_folder_if_not_exists(output_folder):
     if not os.path.exists(output_folder):
@@ -113,7 +178,7 @@ def fetch_and_process_data(output):
     skipped = 0
     while True:
         # quoted_value = urllib.parse.quote('in.("HBCx-118")', safe="(),")
-        quoted_value = urllib.parse.quote('in.("WUSTL WHIM5")', safe="(),")
+        quoted_value = urllib.parse.quote('in.("HBCx-39")', safe="(),")
         params_str = urllib.parse.urlencode(PARAMS)
         filter_str = f"external_model_id={quoted_value}"
         final_url = f"{SEARCH_INDEX_ENDPOINT}?{params_str}&{filter_str}"
@@ -197,10 +262,27 @@ def create_study_section(model, model_folder_path, title):
     attributes = []
     attributes.append(create_attribute("Model ID", model["external_model_id"]))
     attributes.append(create_attribute("Title", title))
-    attributes.append(create_attribute("Study type", model["model_type"]))
+    attributes.append(create_attribute("Model type", model["model_type"]))
+
     attributes.append(create_attribute("Histology", model["histology"]))
-    license = create_attribute("License", model["license_name"])
-    license["valqual"] = [{"name": "url", "value": model["license_url"]}]
+    breast_cancer_biomarkers = model.get("breast_cancer_biomarkers") or []
+    if breast_cancer_biomarkers == []:
+        attributes.append(create_attribute("Breast Cancer Biomarkers", "N/A"))
+    else:
+        for bcb in breast_cancer_biomarkers:
+            attributes.append(create_attribute("Breast Cancer Biomarkers", bcb))
+
+    dataset_available = model.get("dataset_available") or []
+    if dataset_available == []:
+        attributes.append(create_attribute("Dataset Available", "N/A"))
+    else:
+        for data_set in dataset_available:
+            attributes.append(create_attribute("Dataset Available", data_set))
+
+    if model["model_availability_boolean"]:
+        attributes.append(create_attribute("Available for distribution", "Yes"))
+    else:
+        attributes.append(create_attribute("Available for distribution", "No"))
 
     extra_information = fetch_extra_information(model)
 
@@ -213,8 +295,22 @@ def create_study_section(model, model_folder_path, title):
                 "database_url"
             )
 
-    attributes.append(create_attribute("Form url", model.get("form_url", "")))
-    attributes.append(create_attribute("Database url", model.get("database_url", "")))
+    attributes.append(create_attribute("Provider URL", model.get("database_url", "")))
+    attributes.append(create_attribute("Form URL", model.get("form_url", "")))
+    attributes.append(create_attribute("Project", model["project_name"]))
+
+    if model["paediatric"]:
+        attributes.append(create_attribute("Paediatric", "Yes"))
+    else:
+        attributes.append(create_attribute("Paediatric", "No"))
+
+    if model["has_relations"]:
+        attributes.append(create_attribute("Has Related Models", "Yes"))
+    else:
+        attributes.append(create_attribute("Has Related Models", "No"))
+
+    license = create_attribute("License", model["license_name"])
+    license["valqual"] = [{"name": "url", "value": model["license_url"]}]
 
     supplierLink = get_supplier(model["other_model_links"])
     if supplierLink:
@@ -316,6 +412,13 @@ def create_patient_tumor_subsection(model):
     attributes.append(
         {"name": "Patient Ethnicity", "value": model["patient_ethnicity"]}
     )
+    attributes.append(
+        {
+            "name": "Patient Ethnicity Group",
+            "value": get_ethnicity_group(model["patient_ethnicity"]),
+        }
+    )
+
     attributes.append({"name": "Tumour Type", "value": model["tumour_type"]})
     attributes.append({"name": "Cancer System", "value": model["cancer_system"]})
     attributes.append({"name": "Cancer Grade", "value": model["cancer_grade"]})
@@ -342,7 +445,7 @@ def create_pdx_model_engraftment_subsection(model):
             )
         )
 
-        attributes.append(create_attribute("Site", row["engraftment_site"]))
+        attributes.append(create_attribute("Engraftment Site", row["engraftment_site"]))
         attributes.append(create_attribute("Type", row["engraftment_type"]))
         attributes.append(create_attribute("Material", row["engraftment_sample_type"]))
         attributes.append(
@@ -630,7 +733,8 @@ def create_immune_markers_subsection(model):
             attributes.append(create_attribute("Sample ID", sample_id))
             data_by_sample = formated_model_genomics_data[sample_id]
             for marker_name in data_by_sample:
-                marker_value = data_by_sample[marker_name]
+                marker_data = data_by_sample[marker_name].split("|")
+                marker_value = marker_data[0]
                 attributes.append(create_attribute(marker_name, marker_value))
             model_genomics_section_row["attributes"] = attributes
             model_genomics_section.append(model_genomics_section_row)
@@ -673,10 +777,10 @@ def format_immune_markers_data(data):
             per_sample_data[sample_id][marker_name] = ""
 
         marker_value = row["marker_value"]
-        extra = row["essential_or_additional_details"]
+        # extra = row["essential_or_additional_details"]
         value = marker_value
-        if extra:
-            value = value + " (" + extra + ")"
+        # if extra:
+        #     value = value + " (" + extra + ")"
 
         if per_sample_data[sample_id][marker_name] == "":
             per_sample_data[sample_id][marker_name] = value
@@ -687,6 +791,7 @@ def format_immune_markers_data(data):
     # Sort the data so the data is sorted my marker name (on each sample_id)
     for sample_id in per_sample_data:
         per_sample_data[sample_id] = dict(sorted(per_sample_data[sample_id].items()))
+
     return per_sample_data
 
 
