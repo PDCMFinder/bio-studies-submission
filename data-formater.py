@@ -1,4 +1,3 @@
-from datetime import date
 import os
 import requests
 import urllib.parse
@@ -178,12 +177,12 @@ def fetch_and_process_data(output):
     skipped = 0
     while True:
         # quoted_value = urllib.parse.quote('in.("HBCx-118")', safe="(),")
-        quoted_value = urllib.parse.quote('in.("HBCx-39")', safe="(),")
+        # quoted_value = urllib.parse.quote('in.("HBCx-39")', safe="(),")
         params_str = urllib.parse.urlencode(PARAMS)
-        filter_str = f"external_model_id={quoted_value}"
-        final_url = f"{SEARCH_INDEX_ENDPOINT}?{params_str}&{filter_str}"
+        # filter_str = f"external_model_id={quoted_value}"
+        # final_url = f"{SEARCH_INDEX_ENDPOINT}?{params_str}&{filter_str}"
 
-        # final_url = f"{SEARCH_INDEX_ENDPOINT}?{params_str}"
+        final_url = f"{SEARCH_INDEX_ENDPOINT}?{params_str}"
 
         response = requests.get(final_url)
         response.raise_for_status()
